@@ -11,7 +11,8 @@ local_translator = pipeline("text2text-generation", model="google/flan-t5-base")
 # API-based Model (Zephyr 7B - High Quality, runs on remote server)
 # Use the environment variable from your Hugging Face Space secret
 api_token = os.environ.get("HF")
-api_client = InferenceClient("HuggingFaceH4/zephyr-7b-beta", token=api_token)
+api_client = InferenceClient("mistralai/Mistral-7B-Instruct-v0.2", token=api_token)
+
 
 # --- Single Prediction Function ---
 def get_translation(simple_text, model_choice, temperature):
