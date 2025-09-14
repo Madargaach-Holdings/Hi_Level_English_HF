@@ -5,53 +5,46 @@ import os
 
 # --- Model and Client Setup ---
 
-# ✅ Locally Hosted Model (SmolLM2-135M-Instruct)
-# A small, instruction-tuned model for on-device/local execution
+# ✅ Locally Hosted Model (nouamanetazi/cover-letter-t5-base)
+# A small, fine-tuned model for local execution.
 try:
-    local_translator = pipeline(
-        "text-generation",
-        model="HuggingFaceTB/SmolLM2-135M-Instruct",
-        trust_remote_code=True
-    )
+    local_generator = pipeline("text2text-generation", model="nouamanetazi/cover-letter-t5-base")
 except Exception as e:
     print(f"Failed to load local model: {e}")
-    local_translator = None
+    local_generator = None
 
 # ✅ API-based Model (Llama-3.1-8B-Instruct)
-# A powerful, instruction-tuned model for the API-based solution.
-# Ensure you have accepted the license on the model's Hugging Face page.
+# A powerful, general-purpose model accessed via the Inference API.
 api_token = os.environ.get("HF")
 api_client = InferenceClient("meta-llama/Llama-3.1-8B-Instruct", token=api_token)
 
 # --- Single Prediction Function ---
-def get_translation(simple_text, model_choice, temperature):
+def generate_cover_letter(resume_text, job_description, model_choice):
     """
-    Translates a simple sentence into elegant English using either a local or API-based model.
+    Generates a cover letter based on resume and job description.
     """
-    if not simple_text or not simple_text.strip():
-        return "⚠️ Please enter a sentence."
+    if not resume_text or not job_description:
+        return "⚠️ Please provide both a resume and a job description."
 
-    # General prompt for instruction-tuned models
+    # A general prompt for instruction-tuned models
     prompt = (
-        f"Rephrase the following sentence into an elegant, formal, and slightly archaic English style, "
-        f"as if spoken by a monarch. Do not use modern slang or emojis.\n\n"
-        f"Sentence: {simple_text}"
+        f"You are a cover letter writing assistant. Write a professional cover letter "
+        f"that highlights how the applicant's resume is a perfect fit for the job description. "
+        f"Be concise and professional. The applicant's resume is below:\n\n"
+        f"Resume:\n{resume_text}\n\n"
+        f"The job description is below:\n\n"
+        f"Job Description:\n{job_description}\n\n"
+        f"Cover Letter:"
     )
 
     if model_choice == "Locally Hosted":
-        if not local_translator:
-            return "❌ Local model failed to load. Please check logs."
+        if not local_generator:
+            return "❌ Local model failed to load. Check Space logs."
         try:
-            result = local_translator(
-                prompt,
-                max_new_tokens=150,
-                do_sample=True,
-                temperature=temperature
-            )[0]["generated_text"]
-            
-            # The model returns the prompt plus the completion, so we strip the prompt.
-            output = result.split("Sentence:")[-1].split("Answer:")[-1].strip()
-            return output
+            # The local model uses a specific prompt format
+            input_text = f"resume: {resume_text} job_description: {job_description}"
+            cover_letter = local_generator(input_text, max_new_tokens=500)[0]['generated_text']
+            return cover_letter.strip()
         except Exception as e:
             return f"❌ Local model error: {e}"
 
@@ -59,11 +52,12 @@ def get_translation(simple_text, model_choice, temperature):
         if not api_token:
             return "❌ API token not found. Please set the 'HF' secret in your Space settings."
         try:
+            # Pass the detailed prompt to the API client
             response = api_client.text_generation(
                 prompt=prompt,
-                max_new_tokens=150,
+                max_new_tokens=500,
                 do_sample=True,
-                temperature=temperature,
+                temperature=0.7,
                 return_full_text=False
             )
             return response.strip()
@@ -74,10 +68,10 @@ def get_translation(simple_text, model_choice, temperature):
         return "⚠️ Please select a model version."
 
 # --- Gradio UI ---
-with gr.Blocks(title="Elegant English") as demo:
-    gr.Markdown("# 👑 Elegant English Translator")
-    gr.Markdown("Convert casual sentences into elegant, royal-style English.")
-    
+with gr.Blocks(title="Cover Letter Generator") as demo:
+    gr.Markdown("# 🚀 AI-Powered Cover Letter Generator")
+    gr.Markdown("Select a model to generate a custom cover letter from your resume and a job description.")
+
     with gr.Row():
         model_dropdown = gr.Dropdown(
             ["Locally Hosted", "API-Based"],
@@ -85,26 +79,15 @@ with gr.Blocks(title="Elegant English") as demo:
             value="Locally Hosted"
         )
     with gr.Row():
-        input_textbox = gr.Textbox(
-            lines=2,
-            placeholder="Enter a simple sentence...",
-            label="Simple English"
-        )
-        output_textbox = gr.Textbox(label="Elegant English Translation")
-    with gr.Row():
-        temperature_slider = gr.Slider(
-            minimum=0.0,
-            maximum=1.5,
-            value=0.7,
-            step=0.1,
-            label="Creativity / Temperature"
-        )
-    with gr.Row():
-        submit_btn = gr.Button("Translate", variant="primary")
+        resume_input = gr.Textbox(lines=5, label="Your Resume (Text)")
+        job_description_input = gr.Textbox(lines=5, label="Job Description (Text)")
+    
+    submit_btn = gr.Button("Generate Cover Letter", variant="primary")
+    output_textbox = gr.Textbox(label="Generated Cover Letter", lines=10)
 
     submit_btn.click(
-        fn=get_translation,
-        inputs=[input_textbox, model_dropdown, temperature_slider],
+        fn=generate_cover_letter,
+        inputs=[resume_input, job_description_input, model_dropdown],
         outputs=output_textbox
     )
 
