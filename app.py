@@ -3,50 +3,62 @@ from transformers import pipeline
 from huggingface_hub import InferenceClient
 import os
 
-# --- Model Setup ---
+# --- Model and Client Setup ---
 
-# Locally Hosted Model (Flan-T5 is a great choice for CPU, and it's instruction-tuned)
-local_translator = pipeline("text2text-generation", model="google/flan-t5-base")
+# ✅ Locally Hosted Model (SmolLM2-135M-Instruct)
+# A small, instruction-tuned model for on-device/local execution
+try:
+    local_translator = pipeline(
+        "text-generation",
+        model="HuggingFaceTB/SmolLM2-135M-Instruct",
+        trust_remote_code=True
+    )
+except Exception as e:
+    print(f"Failed to load local model: {e}")
+    local_translator = None
 
-# API-based Model (Zephyr 7B - High Quality, runs on remote server)
-# Use the environment variable from your Hugging Face Space secret
+# ✅ API-based Model (Llama-3.1-8B-Instruct)
+# A powerful, instruction-tuned model for the API-based solution.
+# Ensure you have accepted the license on the model's Hugging Face page.
 api_token = os.environ.get("HF")
-api_client = InferenceClient("mistralai/Mistral-7B-Instruct-v0.2", token=api_token)
-
+api_client = InferenceClient("meta-llama/Llama-3.1-8B-Instruct", token=api_token)
 
 # --- Single Prediction Function ---
 def get_translation(simple_text, model_choice, temperature):
-    # Input validation
+    """
+    Translates a simple sentence into elegant English using either a local or API-based model.
+    """
     if not simple_text or not simple_text.strip():
         return "⚠️ Please enter a sentence."
 
-    # A simple but effective prompt for both models.
-    # The more powerful API model will interpret it better.
+    # General prompt for instruction-tuned models
     prompt = (
-        f"Rephrase the following sentence into elegant, formal, and slightly archaic English, "
+        f"Rephrase the following sentence into an elegant, formal, and slightly archaic English style, "
         f"as if spoken by a monarch. Do not use modern slang or emojis.\n\n"
         f"Sentence: {simple_text}"
     )
 
     if model_choice == "Locally Hosted":
+        if not local_translator:
+            return "❌ Local model failed to load. Please check logs."
         try:
-            # For a Seq2Seq model like Flan-T5, do_sample and temperature are standard generation parameters.
             result = local_translator(
                 prompt,
-                max_new_tokens=100,
-                do_sample=True, # enable sampling for creativity
-                temperature=temperature # pass the slider value directly
+                max_new_tokens=150,
+                do_sample=True,
+                temperature=temperature
             )[0]["generated_text"]
-            return result.strip()
+            
+            # The model returns the prompt plus the completion, so we strip the prompt.
+            output = result.split("Sentence:")[-1].split("Answer:")[-1].strip()
+            return output
         except Exception as e:
             return f"❌ Local model error: {e}"
 
     elif model_choice == "API-Based":
-        # Check if the token is available for the API client
         if not api_token:
             return "❌ API token not found. Please set the 'HF' secret in your Space settings."
         try:
-            # Use the API client to generate text
             response = api_client.text_generation(
                 prompt=prompt,
                 max_new_tokens=150,
@@ -54,7 +66,6 @@ def get_translation(simple_text, model_choice, temperature):
                 temperature=temperature,
                 return_full_text=False
             )
-            # The InferenceClient returns a string directly if return_full_text is False
             return response.strip()
         except Exception as e:
             return f"❌ API Error: {e}"
