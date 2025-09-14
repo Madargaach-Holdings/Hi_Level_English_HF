@@ -1,20 +1,23 @@
 import gradio as gr
 from transformers import pipeline
 from huggingface_hub import InferenceClient
-import os
+import os # <-- Import the os library
 
 # --- Model and Client Setup ---
 # Locally hosted model setup
 local_translator = pipeline("text2text-generation", model="t5-small")
 
 # API-based client setup (using a token from a secret)
-api_token = os.environ.get("HF")
+api_token = os.environ.get("HF_TOKEN") # <-- Get the token from the environment
+if not api_token:
+    # Handle the case where the token is not set (e.g., local testing)
+    api_token = "your_placeholder_token_for_local_testing" 
 api_client = InferenceClient("mistralai/Mixtral-8x7B-Instruct-v0.1", token=api_token)
 
 # --- The Single Prediction Function ---
 def get_translation(simple_text, model_choice):
     if model_choice == "Locally Hosted":
-        # Logic for the locally hosted model
+        # ... (your existing local model logic) ...
         prompt = f"Translate '{simple_text}' into elegant English."
         regal_text = local_translator(prompt, max_length=100, num_beams=4)[0]['generated_text']
         return regal_text
