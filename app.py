@@ -8,7 +8,7 @@ import os
 local_translator = pipeline("text2text-generation", model="t5-small")
 
 # API-based client setup (using a token from a secret)
-api_token = os.environ.get("HF_TOKEN")
+api_token = os.environ.get("HF")
 api_client = InferenceClient("mistralai/Mixtral-8x7B-Instruct-v0.1", token=api_token)
 
 # --- The Single Prediction Function ---
