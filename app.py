@@ -5,28 +5,23 @@ import os
 
 # --- Model and Client Setup ---
 
-# ✅ Locally Hosted Model (nouamanetazi/cover-letter-t5-base)
-# A small, fine-tuned model for local execution.
+# ✅ Locally Hosted Model (google/flan-t5-base)
+# A stable, instruction-tuned model known to work on free CPU tiers.
 try:
-    local_generator = pipeline("text2text-generation", model="nouamanetazi/cover-letter-t5-base")
+    local_generator = pipeline("text2text-generation", model="google/flan-t5-base")
 except Exception as e:
     print(f"Failed to load local model: {e}")
     local_generator = None
 
 # ✅ API-based Model (Llama-3.1-8B-Instruct)
-# A powerful, general-purpose model accessed via the Inference API.
 api_token = os.environ.get("HF")
 api_client = InferenceClient("meta-llama/Llama-3.1-8B-Instruct", token=api_token)
 
 # --- Single Prediction Function ---
 def generate_cover_letter(resume_text, job_description, model_choice):
-    """
-    Generates a cover letter based on resume and job description.
-    """
     if not resume_text or not job_description:
         return "⚠️ Please provide both a resume and a job description."
 
-    # A general prompt for instruction-tuned models
     prompt = (
         f"You are a cover letter writing assistant. Write a professional cover letter "
         f"that highlights how the applicant's resume is a perfect fit for the job description. "
@@ -52,7 +47,6 @@ def generate_cover_letter(resume_text, job_description, model_choice):
         if not api_token:
             return "❌ API token not found. Please set the 'HF' secret in your Space settings."
         try:
-            # Pass the detailed prompt to the API client
             response = api_client.text_generation(
                 prompt=prompt,
                 max_new_tokens=500,
