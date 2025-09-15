@@ -1,0 +1,179 @@
+name: Sync to HuggingFace Spaces
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  sync-to-huggingface:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        lfs: true
+    
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    
+    - name: Install Dependencies
+      run: |
+        pip install huggingface_hub
+        pip install --upgrade huggingface_hub
+    
+    - name: Configure Git
+      run: |
+        git config --global user.email "action@github.com"
+        git config --global user.name "GitHub Action"
+    
+    - name: Authenticate with HuggingFace
+      env:
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      run: |
+        python -c "from huggingface_hub import login; login('$HF_TOKEN')"
+    
+    - name: Create Space if not exists
+      env:
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        SPACE_NAME: ${{ github.repository_owner }}/securechat-analytics
+      run: |
+        python << EOF
+        from huggingface_hub import HfApi, SpaceError
+        
+        api = HfApi()
+        try:
+            # Try to get space info
+            api.space_info("$SPACE_NAME")
+            print("Space already exists!")
+        except Exception as e:
+            print(f"Space doesn't exist, creating: {e}")
+            try:
+                api.create_repo(
+                    repo_id="$SPACE_NAME",
+                    repo_type="space",
+                    space_sdk="gradio",
+                    private=False,
+                    exist_ok=True
+                )
+                print("Space created successfully!")
+            except Exception as create_error:
+                print(f"Error creating space: {create_error}")
+        EOF
+    
+    - name: Push to HuggingFace Space
+      env:
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        SPACE_NAME: ${{ github.repository_owner }}/securechat-analytics
+      run: |
+        # Clone the HuggingFace space
+        git clone https://huggingface.co/spaces/$SPACE_NAME huggingface_space || echo "Space doesn't exist yet"
+        
+        # If clone failed, create new directory
+        if [ ! -d "huggingface_space" ]; then
+          mkdir huggingface_space
+          cd huggingface_space
+          git init
+          git remote add origin https://huggingface.co/spaces/$SPACE_NAME
+        else
+          cd huggingface_space
+        fi
+        
+        # Configure git for HuggingFace
+        git config user.email "action@github.com"
+        git config user.name "GitHub Action Sync"
+        
+        # Copy files from GitHub repo
+        cp -r ../* . 2>/dev/null || true
+        
+        # Remove .git directory from copied files
+        rm -rf .git
+        git init
+        git remote add origin https://huggingface.co/spaces/$SPACE_NAME
+        
+        # Create or update README for HuggingFace
+        cat > README.md << 'EOL'
+        ---
+        title: SecureChat Analytics Platform
+        emoji: 🔒
+        colorFrom: blue
+        colorTo: indigo
+        sdk: gradio
+        sdk_version: 4.0.0
+        app_file: app.py
+        pinned: false
+        license: mit
+        ---
+        
+        # 🔒 SecureChat Analytics Platform
+        
+        A privacy-first text analysis platform demonstrating MLOps practices with:
+        
+        ## Features
+        - 🔍 **Sentiment & Tone Analysis** - Advanced text sentiment detection
+        - 📝 **Secure Summarization** - PII-aware text summarization  
+        - 🛡️ **Security Assessment** - Content security risk evaluation
+        - 📊 **Performance Monitoring** - Real-time performance analytics
+        - 🔒 **Privacy Protection** - Session-based data isolation
+        
+        ## Technical Architecture
+        - **Model:** Google VaultGemma-1b (Privacy-focused LLM)
+        - **API Deployment:** HuggingFace Inference Client
+        - **Local Deployment:** Transformers Pipeline
+        - **Frontend:** Gradio with custom components
+        - **CI/CD:** GitHub Actions → HuggingFace Spaces
+        
+        ## MLOps Demonstration
+        This project showcases:
+        1. **API-based ML deployment** (app.py)
+        2. **Local model deployment** (app_local.py) 
+        3. **Automated CI/CD pipeline** (GitHub → HF Spaces)
+        4. **Performance monitoring** and **cost analysis**
+        5. **Security-first design** with **privacy protection**
+        
+        ## Usage
+        1. Enter text in the input field
+        2. Select analysis type
+        3. Click "Analyze Text" for instant results
+        4. Monitor performance via built-in analytics
+        
+        Built for **DS/CS553 Machine Learning Development and Operations** course.
+        EOL
+        
+        # Create requirements.txt
+        cat > requirements.txt << 'EOL'
+        gradio>=4.0.0
+        transformers>=4.30.0
+        torch>=2.0.0
+        huggingface_hub>=0.16.0
+        psutil>=5.9.0
+        accelerate>=0.20.0
+        EOL
+        
+        # Add all files
+        git add .
+        
+        # Check if there are changes to commit
+        if git diff --staged --quiet; then
+          echo "No changes to sync"
+        else
+          git commit -m "🚀 Sync from GitHub: ${{ github.event.head_commit.message || 'Manual sync' }}"
+          
+          # Push to HuggingFace
+          git push --set-upstream origin main --force
+        fi
+    
+    - name: Create Deployment Summary
+      run: |
+        echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+        echo "- **HuggingFace Space:** https://huggingface.co/spaces/${{ github.repository_owner }}/securechat-analytics" >> $GITHUB_STEP_SUMMARY
+        echo "- **Sync Status:** ✅ Success" >> $GITHUB_STEP_SUMMARY
+        echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Timestamp:** $(date)" >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,77 @@
+name: Enhanced Discord Webhook Notifications
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  release:
+    types: [ published ]
+  workflow_run:
+    workflows: ["Sync to HuggingFace Spaces", "Test Local Model Deployment"]
+    types: [ completed ]
+
+jobs:
+  notify-discord:
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+      
+    - name: Setup Python for Enhanced Webhook
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    
+    - name: Install Dependencies
+      run: |
+        pip install requests python-dateutil pytz
+    
+    - name: Send Enhanced Discord Notification
+      env:
+        DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        python << 'EOF'
+        import requests
+        import json
+        import os
+        from datetime import datetime, timezone
+        import subprocess
+        
+        def get_commit_info():
+            """Get detailed commit information"""
+            try:
+                # Get commit hash and message
+                commit_hash = subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode().strip()[:7]
+                commit_msg = subprocess.check_output(['git', 'log', '-1', '--pretty=%B']).decode().strip()
+                author = subprocess.check_output(['git', 'log', '-1', '--pretty=%an']).decode().strip()
+                
+                # Get changed files
+                changed_files = subprocess.check_output(['git', 'diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD']).decode().strip().split('\n')
+                
+                return {
+                    'hash': commit_hash,
+                    'message': commit_msg,
+                    'author': author,
+                    'files': [f for f in changed_files if f]
+                }
+            except:
+                return {
+                    'hash': 'unknown',
+                    'message': 'Unable to retrieve commit info',
+                    'author': 'GitHub Actions',
+                    'files': []
+                }
+        
+        def get_workflow_status_color(status):
+            """Get color based on workflow status"""
+            colors = {
+                'success': 0x00ff00,  # Green
+                'failure': 0xff0000,  # Red  
+                'cancelled': 0xffff00,  # Yellow
+                'skipped': 0x808080,   # Gray
+            }
+            return colors.get(status.lower(), 0x0099ff)  # Default blue

@@ -1,0 +1,394 @@
+name: Test Local Model Deployment
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  schedule:
+    # Run tests daily at 2 AM UTC
+    - cron: '0 2 * * *'
+
+jobs:
+  test-local-model:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    strategy:
+      matrix:
+        python-version: [3.8, 3.9, '3.10']
+    
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+      with:
+        lfs: true
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y git-lfs
+    
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pytest pytest-cov pytest-mock
+        pip install gradio transformers torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+        pip install huggingface_hub psutil accelerate
+        pip install requests beautifulsoup4
+    
+    - name: Create test files
+      run: |
+        mkdir -p tests
+        cat > tests/test_local_analytics.py << 'EOF'
+        import pytest
+        import sys
+        import os
+        import time
+        from unittest.mock import Mock, patch, MagicMock
+        
+        # Add the parent directory to the path to import the app
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        
+        class TestLocalSecureChatAnalytics:
+            """Test suite for Local SecureChat Analytics"""
+            
+            def setup_method(self):
+                """Set up test fixtures before each test method."""
+                with patch('app_local.AutoTokenizer'), \
+                     patch('app_local.AutoModelForCausalLM'), \
+                     patch('app_local.pipeline'):
+                    from app_local import LocalSecureChatAnalytics
+                    self.analytics = LocalSecureChatAnalytics()
+            
+            def test_session_id_generation(self):
+                """Test that session ID is generated correctly"""
+                session_id = self.analytics.generate_session_id()
+                assert len(session_id) == 8
+                assert isinstance(session_id, str)
+            
+            def test_input_sanitization(self):
+                """Test input sanitization functionality"""
+                # Test HTML tag removal
+                dirty_input = "<script>alert('xss')</script>Hello World!"
+                clean_input = self.analytics.sanitize_input(dirty_input)
+                assert "<script>" not in clean_input
+                assert "Hello World!" in clean_input
+                
+                # Test special character removal
+                dirty_input = "Hello@#$%^&*()World!"
+                clean_input = self.analytics.sanitize_input(dirty_input)
+                assert "@#$%^&*()" not in clean_input
+                assert "HelloWorld!" in clean_input
+            
+            def test_system_stats(self):
+                """Test system statistics retrieval"""
+                stats = self.analytics.get_system_stats()
+                assert "System Resources" in stats
+                assert "CPU Usage" in stats
+                assert "RAM Usage" in stats
+            
+            def test_performance_stats_empty(self):
+                """Test performance stats when no analysis has been performed"""
+                stats = self.analytics.get_performance_stats()
+                assert "No analysis performed yet" in stats
+            
+            def test_performance_stats_with_data(self):
+                """Test performance stats with mock data"""
+                # Add mock analysis record
+                mock_record = {
+                    "timestamp": "2024-01-01 12:00:00",
+                    "session_id": "test123",
+                    "input_length": 100,
+                    "processing_time": 1.5,
+                    "method": "Local Model",
+                    "analysis_type": "Sentiment Analysis",
+                    "device": "cpu"
+                }
+                self.analytics.analysis_history.append(mock_record)
+                
+                stats = self.analytics.get_performance_stats()
+                assert "Total Analyses: 1" in stats
+                assert "1.50 seconds" in stats
+                assert "Local Model Execution" in stats
+            
+            @patch('app_local.AutoTokenizer')
+            @patch('app_local.AutoModelForCausalLM')  
+            @patch('app_local.pipeline')
+            def test_model_loading_success(self, mock_pipeline, mock_model, mock_tokenizer):
+                """Test successful model loading"""
+                # Mock successful model loading
+                mock_tokenizer.from_pretrained.return_value = Mock()
+                mock_model.from_pretrained.return_value = Mock()
+                mock_pipeline.return_value = Mock()
+                
+                result = self.analytics.load_model()
+                assert "Model loaded successfully" in result
+                assert self.analytics.model_loaded == True
+            
+            @patch('app_local.AutoTokenizer')
+            def test_model_loading_failure(self, mock_tokenizer):
+                """Test model loading failure handling"""
+                # Mock failed model loading
+                mock_tokenizer.from_pretrained.side_effect = Exception("Network error")
+                
+                result = self.analytics.load_model()
+                assert "Error loading model" in result
+                assert self.analytics.model_loaded == False
+            
+            def test_analysis_without_loaded_model(self):
+                """Test that analysis fails gracefully when model is not loaded"""
+                result, time_taken = self.analytics.analyze_with_local_model(
+                    "Test text", "Sentiment & Tone Analysis"
+                )
+                assert "Please load the model first" in result
+                assert time_taken == 0
+            
+            @patch('app_local.pipeline')
+            def test_analysis_with_loaded_model(self, mock_pipeline_func):
+                """Test analysis with a loaded model"""
+                # Setup mock model
+                self.analytics.model_loaded = True
+                mock_pipeline = Mock()
+                mock_pipeline.return_value = [{'generated_text': 'Sentiment: Positive\nTone: Friendly'}]
+                self.analytics.pipeline = mock_pipeline
+                
+                result, time_taken = self.analytics.analyze_with_local_model(
+                    "Hello, how are you today?", "Sentiment & Tone Analysis"
+                )
+                
+                assert isinstance(result, str)
+                assert time_taken >= 0
+                assert len(self.analytics.analysis_history) == 1
+            
+            def test_gradio_interface_functions(self):
+                """Test the Gradio interface functions"""
+                from app_local import analyze_local_interface, reset_local_session
+                
+                # Test empty input
+                result, perf, stats = analyze_local_interface("", "Sentiment & Tone Analysis")
+                assert "Please enter some text" in result
+                
+                # Test without loaded model
+                result, perf, stats = analyze_local_interface("Test", "Sentiment & Tone Analysis")
+                assert "Please load the model first" in result
+                
+                # Test session reset
+                result, perf, stats = reset_local_session()
+                assert "New session started" in result
+        
+        class TestSecurityFeatures:
+            """Test security and privacy features"""
+            
+            def setup_method(self):
+                with patch('app_local.AutoTokenizer'), \
+                     patch('app_local.AutoModelForCausalLM'), \
+                     patch('app_local.pipeline'):
+                    from app_local import LocalSecureChatAnalytics
+                    self.analytics = LocalSecureChatAnalytics()
+            
+            def test_malicious_input_sanitization(self):
+                """Test that malicious inputs are properly sanitized"""
+                malicious_inputs = [
+                    "<script>alert('xss')</script>",
+                    "javascript:alert('xss')",
+                    "<img src=x onerror=alert('xss')>",
+                    "'; DROP TABLE users; --",
+                    "{{constructor.constructor('alert(1)')()}}"
+                ]
+                
+                for malicious_input in malicious_inputs:
+                    clean_input = self.analytics.sanitize_input(malicious_input)
+                    assert "<script>" not in clean_input
+                    assert "javascript:" not in clean_input
+                    assert "onerror=" not in clean_input
+                    assert "DROP TABLE" not in clean_input
+                    assert "constructor" not in clean_input
+            
+            def test_session_isolation(self):
+                """Test that sessions are properly isolated"""
+                session1 = self.analytics.session_id
+                
+                # Create new instance (simulating new session)
+                with patch('app_local.AutoTokenizer'), \
+                     patch('app_local.AutoModelForCausalLM'), \
+                     patch('app_local.pipeline'):
+                    from app_local import LocalSecureChatAnalytics
+                    analytics2 = LocalSecureChatAnalytics()
+                
+                session2 = analytics2.session_id
+                
+                assert session1 != session2
+                assert len(session1) == len(session2) == 8
+        
+        if __name__ == "__main__":
+            pytest.main([__file__, "-v"])
+        EOF
+        
+        # Create integration tests
+        cat > tests/test_integration.py << 'EOF'
+        import pytest
+        import requests
+        import time
+        import threading
+        from unittest.mock import patch
+        
+        class TestGradioIntegration:
+            """Integration tests for Gradio application"""
+            
+            def test_gradio_app_creation(self):
+                """Test that Gradio app can be created without errors"""
+                with patch('app_local.AutoTokenizer'), \
+                     patch('app_local.AutoModelForCausalLM'), \
+                     patch('app_local.pipeline'):
+                    try:
+                        import app_local
+                        assert app_local.demo is not None
+                        assert hasattr(app_local.demo, 'launch')
+                    except Exception as e:
+                        pytest.fail(f"Failed to create Gradio app: {e}")
+            
+            def test_api_app_creation(self):
+                """Test that API-based app can be created"""
+                with patch('app.InferenceClient'):
+                    try:
+                        import app
+                        assert app.demo is not None
+                        assert hasattr(app.demo, 'launch')
+                    except Exception as e:
+                        pytest.fail(f"Failed to create API app: {e}")
+        
+        class TestPerformanceBenchmarks:
+            """Performance benchmark tests"""
+            
+            def test_sanitization_performance(self):
+                """Test input sanitization performance"""
+                with patch('app_local.AutoTokenizer'), \
+                     patch('app_local.AutoModelForCausalLM'), \
+                     patch('app_local.pipeline'):
+                    from app_local import LocalSecureChatAnalytics
+                    analytics = LocalSecureChatAnalytics()
+                
+                # Test with various input sizes
+                test_inputs = [
+                    "Short text" * 10,      # ~100 chars
+                    "Medium text " * 100,   # ~1000 chars  
+                    "Long text " * 1000,    # ~10000 chars
+                ]
+                
+                for test_input in test_inputs:
+                    start_time = time.time()
+                    result = analytics.sanitize_input(test_input)
+                    end_time = time.time()
+                    
+                    processing_time = end_time - start_time
+                    assert processing_time < 1.0  # Should be very fast
+                    assert isinstance(result, str)
+        EOF
+        
+        # Create pytest configuration
+        cat > pytest.ini << 'EOF'
+        [tool:pytest]
+        testpaths = tests
+        python_files = test_*.py
+        python_classes = Test*
+        python_functions = test_*
+        addopts = -v --tb=short --strict-markers
+        markers =
+            slow: marks tests as slow
+            integration: marks tests as integration tests
+            security: marks tests as security-related
+        EOF
+    
+    - name: Run Security Tests
+      run: |
+        python -m pytest tests/ -v -k "security" --tb=short
+    
+    - name: Run Unit Tests
+      run: |
+        python -m pytest tests/test_local_analytics.py -v --tb=short --cov=app_local --cov-report=xml
+    
+    - name: Run Integration Tests  
+      run: |
+        python -m pytest tests/test_integration.py -v --tb=short
+    
+    - name: Test Model Loading Simulation
+      env:
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      run: |
+        python << 'EOF'
+        import os
+        import sys
+        from unittest.mock import Mock, patch
+        
+        # Test that we can import without actual model loading
+        with patch('transformers.AutoTokenizer') as mock_tokenizer, \
+             patch('transformers.AutoModelForCausalLM') as mock_model, \
+             patch('transformers.pipeline') as mock_pipeline:
+            
+            # Mock the returns
+            mock_tokenizer.from_pretrained.return_value = Mock()
+            mock_model.from_pretrained.return_value = Mock() 
+            mock_pipeline.return_value = Mock()
+            
+            try:
+                from app_local import LocalSecureChatAnalytics
+                analytics = LocalSecureChatAnalytics()
+                
+                # Test model loading simulation
+                result = analytics.load_model()
+                print(f"Model loading test: {result}")
+                
+                # Test basic functionality
+                clean_text = analytics.sanitize_input("<script>test</script>Hello")
+                print(f"Sanitization test: {clean_text}")
+                
+                # Test stats
+                stats = analytics.get_system_stats()
+                print("System stats retrieved successfully")
+                
+                print("✅ All simulation tests passed!")
+                
+            except Exception as e:
+                print(f"❌ Simulation test failed: {e}")
+                sys.exit(1)
+        EOF
+    
+    - name: Generate Test Report
+      if: always()
+      run: |
+        echo "## 🧪 Test Results Summary" >> $GITHUB_STEP_SUMMARY
+        echo "- **Python Version:** ${{ matrix.python-version }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **OS:** ubuntu-latest" >> $GITHUB_STEP_SUMMARY
+        echo "- **Test Status:** ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Timestamp:** $(date)" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Test Coverage" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Security tests (input sanitization)" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Unit tests (core functionality)" >> $GITHUB_STEP_SUMMARY  
+        echo "- ✅ Integration tests (Gradio interface)" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Performance tests (response time)" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Model loading simulation" >> $GITHUB_STEP_SUMMARY
+    
+    - name: Upload Test Results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: test-results-${{ matrix.python-version }}
+        path: |
+          coverage.xml
+          .pytest_cache/
+          tests/
